@@ -1,9 +1,7 @@
-// Go wiki from https://golang.org/doc/articles/wiki/ implemented
-// using httpctx, httplog and httpmux.
+// Go wiki from https://golang.org/doc/articles/wiki/ using httpmux.
 package main
 
 import (
-	"errors"
 	"html/template"
 	"io/ioutil"
 	"log"
@@ -13,7 +11,6 @@ import (
 
 	"golang.org/x/net/context"
 
-	"github.com/go-web/httpctx"
 	"github.com/go-web/httplog"
 	"github.com/go-web/httpmux"
 )
@@ -26,7 +23,7 @@ var (
 func main() {
 	mux := httpmux.New()
 	logger := log.New(os.Stderr, "[wiki] ", 0)
-	mux.Use(httplog.ApacheCommonFormat(logger))
+	mux.Use(httplog.ApacheCombinedFormat(logger))
 	mux.Use(titleValidation)
 	mux.GET("/view/:title", viewHandler)
 	mux.GET("/edit/:title", editHandler)
@@ -40,29 +37,19 @@ func main() {
 
 func titleValidation(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		title, err := getTitle(w, r)
-		if err != nil {
-			httplog.Error(r, err)
+		title := httpmux.Params(r).ByName("title")
+		if !validPath.MatchString(title) {
+			http.NotFound(w, r)
 			return
 		}
-		ctx := httpctx.Get(r)
-		ctx = context.WithValue(ctx, "title", title)
-		httpctx.Set(r, ctx)
+		ctx := context.WithValue(httpmux.Context(r), "title", title)
+		httpmux.SetContext(ctx, r)
 		next(w, r)
 	}
 }
 
-func getTitle(w http.ResponseWriter, r *http.Request) (string, error) {
-	title := httpmux.Params(r).ByName("title")
-	if !validPath.MatchString(title) {
-		http.NotFound(w, r)
-		return "", errors.New("Invalid Page Title")
-	}
-	return title, nil
-}
-
 func viewHandler(w http.ResponseWriter, r *http.Request) {
-	title := httpctx.Get(r).Value("title").(string)
+	title := httpmux.Context(r).Value("title").(string)
 	p, err := loadPage(title)
 	if err != nil {
 		http.Redirect(w, r, "/edit/"+title, http.StatusFound)
@@ -72,7 +59,7 @@ func viewHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func editHandler(w http.ResponseWriter, r *http.Request) {
-	title := httpctx.Get(r).Value("title").(string)
+	title := httpmux.Context(r).Value("title").(string)
 	p, err := loadPage(title)
 	if err != nil {
 		p = &Page{Title: title}
@@ -81,13 +68,12 @@ func editHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func saveHandler(w http.ResponseWriter, r *http.Request) {
-	title := httpctx.Get(r).Value("title").(string)
+	title := httpmux.Context(r).Value("title").(string)
 	body := r.FormValue("body")
 	p := &Page{Title: title, Body: []byte(body)}
 	err := p.save()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
-		httplog.Error(r, err)
 		return
 	}
 	http.Redirect(w, r, "/view/"+title, http.StatusFound)
